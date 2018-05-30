@@ -1206,19 +1206,21 @@ describe("any", function() {
 
     function testReject(promises, deferreds) {
         var promise = Q.any(promises);
+        var expectedError = new Error('Rejected');
 
         for (var index = 0; index < deferreds.length; index++) {
             var deferred = deferreds[index];
             (function() {
-                deferred.reject(new Error('Rejected'));
+                deferred.reject(expectedError);
             })();
         }
 
         return Q.delay(250)
           .then(function() {
               expect(promise.isRejected()).toBe(true);
+              expect(promise.inspect().reason).toBe(expectedError);
               expect(promise.inspect().reason.message)
-              .toBe("Can't get fulfillment value from any promise, all promises were rejected.");
+              .toBe("Q can't get fulfillment value from any promise, all promises were rejected. Last error message: Rejected");
           })
           .timeout(1000);
     }
@@ -1680,7 +1682,7 @@ describe("fin", function () {
                 try {
                     Q().fin(foo.bar);
                 } catch (err) {
-                    expect(err.message).toBe("Can't apply finally callback");
+                    expect(err.message).toBe("Q can't apply finally callback");
                     threw = true;
                 }
 
@@ -1695,7 +1697,7 @@ describe("fin", function () {
                 try {
                     Q().fin(123);
                 } catch (err) {
-                    expect(err.message).toBe("Can't apply finally callback");
+                    expect(err.message).toBe("Q can't apply finally callback");
                     threw = true;
                 }
 
@@ -2752,6 +2754,72 @@ describe("stack trace formatting", function () {
         return Q.all([d1.promise.fail(function () {}), d2.promise.fail(function () { })])
         .then(function () {
             expect(captured[0]).toEqual(captured[1]);
+        });
+    });
+});
+
+describe("long stack traces", function () {
+    beforeEach(function () {
+        Q.longStackSupport = true;
+    });
+
+    afterEach(function () {
+        Q.longStackSupport = false;
+    });
+
+    it("include all the calling functions", function () {
+        function func1() {
+            return Q().then(function () { return func2(); });
+        }
+        function func2() {
+            return new Q.Promise(function (resolve, reject) {
+                func3().then(resolve, reject);
+            });
+        }
+        function func3() {
+            return new Q.Promise(function (resolve, reject) {
+                setTimeout(function () {
+                    reject(new Error(REASON));
+                }, 0);
+            });
+        }
+
+        return func1()
+        .catch(function (err) {
+            expect(err.stack).toMatch(/func3(.|\n)*func2(.|\n)*func1/);
+        });
+    });
+
+    it("does not duplicate lines when rethrowing an error", function () {
+        function func1() {
+            return func2()
+                .catch(function rethrow (err) {throw err;})
+                .catch(function rethrow (err) {throw err;});
+        }
+        function func2() {
+            return Q().then(function () {
+                return func3();
+            });
+        }
+        function func3() {
+            return Q.reject(new Error(REASON));
+        }
+
+        return func1()
+        .catch(function (err) {
+            expect(err.stack).toMatch(/func3(.|\n)*func2(.|\n)*func1/);
+            expect(err.stack.match(/func1/g).length).toBe(1);
+        });
+    });
+
+    it("does not add visible properties to thrown errors", function () {
+        return Q().then(function () { throw new Error(REASON); })
+        .catch(function (err) {
+            var keys = [];
+            for (var key in err) {
+                keys.push(key);
+            }
+            expect(keys.length).toBe(0);
         });
     });
 });
